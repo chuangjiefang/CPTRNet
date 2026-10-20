@@ -1,5 +1,5 @@
-# CRTNet
-Code of Hyperspectral Image Super-Resolution via GKConv-Based CP Decomposition
+# CPTRNet
+Code of GKConv-Guided CP Decomposition for Hyperspectral and Multispectral Image Fusion
 
 # Getting started
 
@@ -8,7 +8,7 @@ Code of Hyperspectral Image Super-Resolution via GKConv-Based CP Decomposition
 1. clone the repository
 
 ```bash
-git clone https://github.com/xuhonghui96/CPTRNet.git
+git clone https://github.com/chuangjiefang/CPTRNet.git
 cd CPTRNet
 ```
 
