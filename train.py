@@ -1,7 +1,6 @@
 import time
 import torch
 import torch.backends.cudnn as cudnn
-import torch.optim
 from torch import nn
 import option
 from torch.nn import functional as F
@@ -20,9 +19,6 @@ from torch.autograd import Variable
 import importlib
 import logging
 import scipy.io
-from einops import rearrange
-from thop import profile
-from thop import clever_format
 
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
