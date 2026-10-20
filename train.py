@@ -3,7 +3,6 @@ import torch
 import torch.backends.cudnn as cudnn
 from torch import nn
 import option
-from torch.nn import functional as F
 from os.path import *
 import torch.utils.data as data
 from torch.utils.data import DataLoader
