@@ -1,5 +1,6 @@
 import argparse
 
+
 def args_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', type=str, default='CPTRNet')
