@@ -5,11 +5,13 @@ from functools import lru_cache
 from torch.nn.functional import conv2d
 
 
-class KAGNConv(nn.Module):
+class GKConv(nn.Module):
+    """Gram-polynomial-based KAN convolution (GKConv)."""
+
     def __init__(self, conv_class, norm_class, conv_w_fun, input_dim, output_dim, degree, kernel_size,
                  groups=1, padding=0, stride=1, dilation=1, dropout: float = 0.0, ndim: int = 2.,
                  **norm_kwargs):
-        super(KAGNConv, self).__init__()
+        super(GKConv, self).__init__()
         self.inputdim = input_dim
         self.outdim = output_dim
         self.degree = degree
@@ -96,7 +98,7 @@ class KAGNConv(nn.Module):
         grams_basis = grams_basis[:, indexes]
         return grams_basis
 
-    def forward_kag(self, x):
+    def forward_gkconv(self, x):
         basis = self.base_conv(self.base_activation(x))
         x = torch.tanh(x).contiguous()
 
@@ -109,12 +111,12 @@ class KAGNConv(nn.Module):
         return y
 
     def forward(self, x):
-        return self.forward_kag(x)
+        return self.forward_gkconv(x)
 
-class KAGNConv2D(KAGNConv):
+class GKConv2D(GKConv):
     def __init__(self, input_dim, output_dim, kernel_size, degree=3, groups=1, padding=0, stride=1, dilation=1,
                  dropout: float = 0.0, norm_layer=nn.InstanceNorm2d, **norm_kwargs):
-        super(KAGNConv2D, self).__init__(nn.Conv2d, norm_layer, conv2d,
+        super(GKConv2D, self).__init__(nn.Conv2d, norm_layer, conv2d,
                                               input_dim, output_dim,
                                               degree, kernel_size,
                                               groups=groups, padding=padding, stride=stride, dilation=dilation,
@@ -170,17 +172,20 @@ class KVG(nn.Module):
         return self.fc(y)
 
 
-class GKAN(nn.Module):
+class RTG(nn.Module):
+    """Rank-1 tensor generation (RTG), corresponding to Eq. (2)."""
+
     def __init__(self, c_in, w_in, h_in):
-        super(GKAN, self).__init__()
+        super(RTG, self).__init__()
+        # Keep existing attribute names for state_dict compatibility.
         self.msa_c = nn.Sequential(
-            KAGNConv2D(input_dim=c_in, output_dim=c_in, kernel_size=1)
+            GKConv2D(input_dim=c_in, output_dim=c_in, kernel_size=1)
         )
         self.msa_h = nn.Sequential(
-            KAGNConv2D(input_dim=c_in, output_dim=c_in, kernel_size=1)
+            GKConv2D(input_dim=h_in, output_dim=h_in, kernel_size=1)
         )
         self.msa_w = nn.Sequential(
-            KAGNConv2D(input_dim=c_in, output_dim=c_in, kernel_size=1)
+            GKConv2D(input_dim=w_in, output_dim=w_in, kernel_size=1)
         )
         self.conv_c = nn.Sequential(
             nn.Conv2d(c_in, c_in, (1, 1), bias=False),
@@ -213,28 +218,30 @@ class GKAN(nn.Module):
 
     def forward(self, x_in):
         x_c = x_in
-        x_w = x_in.permute(0, 2, 1, 3)
-        x_h = x_in.permute(0, 3, 2, 1)
+        x_h = x_in.permute(0, 2, 1, 3)  # [B, H, C, W]
+        x_w = x_in.permute(0, 3, 2, 1)  # [B, W, H, C]
         out_c = self.msa_c(x_c)
         out_h = self.msa_h(x_h)
         out_w = self.msa_w(x_w)
         out_c = self.conv_c(out_c + x_c)
         out_h = self.conv_h(out_h + x_h)
         out_w = self.conv_w(out_w + x_w)
-        vector_c = out_c.permute(0, 1, 3, 2)
-        vector_h = out_h.permute(0, 3, 2, 1)
-        vector_w = out_w.permute(0, 2, 1, 3)
-        o_all = torch.cat((vector_c, vector_h,vector_w), dim=1)
-        out = self.conv(o_all)
+        vector_c = self.rtgb_c1(out_c)
+        vector_h = self.rtgb_h1(out_h)
+        vector_w = self.rtgb_w1(out_w)
+        # Per-sample CP outer product: [B, C] x [B, H] x [B, W].
+        out = torch.einsum('bc,bh,bw->bchw', vector_c, vector_h, vector_w)
         return out
 
 
-class RTKAN(nn.Module):
+class CPTR(nn.Module):
+    """CP tensor reconstruction through progressive RTG residual components."""
+
     def __init__(self, c_in, w_in, h_in, heads_num, rtgb_num):
-        super(RTKAN, self).__init__()
-        self.rtgb1 = GKAN(c_in, w_in, h_in, heads_num)
-        self.rtgb2 = GKAN(c_in, w_in, h_in, heads_num)
-        self.rtgb3 = GKAN(c_in, w_in, h_in, heads_num)
+        super(CPTR, self).__init__()
+        self.rtgb1 = RTG(c_in, w_in, h_in)
+        self.rtgb2 = RTG(c_in, w_in, h_in)
+        self.rtgb3 = RTG(c_in, w_in, h_in)
         self.conv = nn.Sequential(
             nn.Conv2d(c_in * rtgb_num, c_in, (3, 3), padding=1),
         )
@@ -249,6 +256,8 @@ class RTKAN(nn.Module):
 
 
 class CP_Model(nn.Module):
+    """Local feature processing wrapper containing the CPTR block."""
+
     def __init__(self, w_in, h_in, cp_in_c, heads_num, rtgb_num):
         super(CP_Model, self).__init__()
         self.conv = nn.Sequential(
@@ -256,7 +265,7 @@ class CP_Model(nn.Module):
             nn.LeakyReLU(negative_slope=0.2, inplace=False),
             nn.Conv2d(cp_in_c, cp_in_c, kernel_size=(3, 3), stride=(1, 1), padding=1),
         )
-        self.transformer_DRTLM = RTKAN(cp_in_c, w_in, h_in, heads_num, rtgb_num)
+        self.transformer_DRTLM = CPTR(cp_in_c, w_in, h_in, heads_num, rtgb_num)
         self.resnet = EnhanceBlock(cp_in_c)
 
     def forward(self, x):
