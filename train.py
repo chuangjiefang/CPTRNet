@@ -15,7 +15,6 @@ import torch.utils.data as tud
 from torch import optim
 from torch.optim.lr_scheduler import MultiStepLR
 import time
-from torch.autograd import Variable
 import importlib
 import logging
 import scipy.io
