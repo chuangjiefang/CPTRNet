@@ -10,17 +10,15 @@ import Pypher
 import random
 import numpy as np
 from scipy.sparse import linalg
-from math import exp
 from os.path import *
 import torch.nn as nn
 import scipy.io as sio
 import torch.utils.data as tud
-import torch.nn.functional as F
 import torch.utils.data as data
 import skimage.measure as measure
-from torch.autograd import Variable
 from torch.utils.data import DataLoader
 from skimage.metrics import structural_similarity as compare_ssim
+
 
 def optset(opt):
     if opt.dataset == 'Cave':
@@ -124,7 +122,6 @@ def prepare_data(opt, path, file_list, file_num, type):
         data = sio.loadmat(path2)
         HR_MSI[:,:,:,idx] = data['Y']
     return HR_HSI, HR_MSI
-
 
 
 def loadpath(pathlistfile,shuffle=True):
@@ -242,17 +239,9 @@ class data_preparation_tensor(tud.Dataset):
         lrhsi = lrhsi.squeeze(0)
 
         return hrhsi, hrmsi, lrhsi
-    
+
     def __len__(self):
         return self.num
-
-
-def qualityEvaluation1(opt, HRHS, result):
-    psnr = PSNR(result.cpu().detach().numpy(), HRHS.numpy(), data_range=1.0)
-    ssim = SSIM(result, HRHS.cuda())
-    sam = SAM(result, HRHS)
-    ergas = ERGAS(result, HRHS, opt.sf)
-    return psnr, ssim, sam, ergas
 
 
 def qualityEvaluation(opt, HRHS, result):
@@ -273,109 +262,6 @@ def qualityEvaluationTotal(opt, psnr_total, ssim_total, sam_total, ergas_total, 
     SAM = sam_total/num
     ERGAS = ergas_total/num 
     return PSNR, SSIM, SAM, ERGAS
-
-
-
-def PSNR(im_true, im_test, data_range=None):
-    im_true, im_test = _as_floats(im_true, im_test)
-
-    err = compare_mse(im_true, im_test)
-    return 10 * np.log10((data_range ** 2) / err)
-
-def _as_floats(im1, im2):
-    float_type = np.result_type(im1.dtype, im2.dtype, np.float32)
-    im1 = np.asarray(im1, dtype=float_type)
-    im2 = np.asarray(im2, dtype=float_type)
-    return im1, im2
-
-def compare_mse(im1, im2):
-    im1, im2 = _as_floats(im1, im2)
-    return np.mean(np.square(im1 - im2), dtype=np.float64)
-
-
-def gaussian(window_size, sigma):
-    gauss = torch.Tensor([exp(-(x - window_size//2)**2/float(2*sigma**2)) for x in range(window_size)])
-    return gauss/gauss.sum()
-
-def create_window(window_size, channel):
-    _1D_window = gaussian(window_size, 1.5).unsqueeze(1)
-    _2D_window = _1D_window.mm(_1D_window.t()).float().unsqueeze(0).unsqueeze(0)
-    window = Variable(_2D_window.expand(channel, 1, window_size, window_size).contiguous())
-    return window
-
-def _ssim(img1, img2, window, window_size, channel, size_average = True):
-    mu1 = F.conv2d(img1, window, padding = window_size//2, groups = channel)
-    mu2 = F.conv2d(img2, window, padding = window_size//2, groups = channel)
-
-    mu1_sq = mu1.pow(2)
-    mu2_sq = mu2.pow(2)
-    mu1_mu2 = mu1*mu2
-
-    sigma1_sq = F.conv2d(img1*img1, window, padding = window_size//2, groups = channel) - mu1_sq
-    sigma2_sq = F.conv2d(img2*img2, window, padding = window_size//2, groups = channel) - mu2_sq
-    sigma12 = F.conv2d(img1*img2, window, padding = window_size//2, groups = channel) - mu1_mu2
-
-    C1 = 0.01**2
-    C2 = 0.03**2
-
-    ssim_map = ((2*mu1_mu2 + C1)*(2*sigma12 + C2))/((mu1_sq + mu2_sq + C1)*(sigma1_sq + sigma2_sq + C2))
-
-    if size_average:
-        return ssim_map.mean()
-    else:
-        return ssim_map.mean(1).mean(1).mean(1)
-
-def SSIM(img1, img2, window_size = 11, size_average = True):
-    (_, channel, _, _) = img1.size()
-    window = create_window(window_size, channel)
-    
-    if img1.is_cuda:
-        window = window.cuda(img1.get_device())
-    window = window.type_as(img1)
-    
-    return _ssim(img1, img2, window, window_size, channel, size_average)
-
-def SAM(im_true, im_fake):
-    I_true = im_true.data.cpu().numpy()
-    I_fake = im_fake.data.cpu().numpy()
-    N = I_true.shape[0]
-    C = I_true.shape[1]
-    H = I_true.shape[2]
-    W = I_true.shape[3]
-    batch_sam = 0
-    for i in range(N):
-        true = I_true[i,:,:,:].reshape(C, H*W)
-        fake = I_fake[i,:,:,:].reshape(C, H*W)
-        nom = np.sum(np.multiply(true, fake), 0).reshape(H*W, 1)
-        denom1 = np.sqrt(np.sum(np.square(true), 0)).reshape(H*W, 1)
-        denom2 = np.sqrt(np.sum(np.square(fake), 0)).reshape(H*W, 1)
-        # print(np.min(np.multiply(denom1,denom2)))
-        sam = np.arccos(np.divide(nom,np.multiply(denom1,denom2))).reshape(H*W, 1)
-        sam = sam/np.pi*180
-        # ignore pixels that have zero norm
-        idx = (np.isfinite(sam))
-        batch_sam += np.sum(sam[idx])/np.sum(idx)
-        if np.sum(~idx) != 0:
-            print("waring: some values were ignored when computing SAM")
-    return batch_sam/N
-
-
-def ERGAS(img_fus, img_tgt, scale):
-    img_tgt = img_tgt.squeeze(0).data.cpu().numpy()
-    img_fus = img_fus.squeeze(0).data.cpu().numpy()
-    img_tgt = np.squeeze(img_tgt)
-    img_fus = np.squeeze(img_fus)
-    img_tgt = img_tgt.reshape(img_tgt.shape[0], -1)
-    img_fus = img_fus.reshape(img_fus.shape[0], -1)
-
-    rmse = np.mean((img_tgt-img_fus)**2, axis=1)
-    rmse = rmse**0.5
-    mean = np.mean(img_tgt, axis=1)
-
-    ergas = np.mean((rmse/mean)**2)
-    ergas = 100/ scale *ergas**0.5
-
-    return ergas
 
 
 def compute_ssim(im1, im2):
@@ -423,3 +309,37 @@ def compute_sam(im1, im2):
     sam = np.rad2deg(np.arccos((mole) / (deno + 1e-7)))
     sam = np.mean(sam)
     return sam
+
+
+def reconstruction(opt, net2, LRHS, HRMS, training_size=64, stride=32):
+    training_size_LRHS = training_size // opt.sf
+
+    index_matrix = torch.zeros((opt.hschannel, HRMS.shape[2], HRMS.shape[3])).cuda()  # (31,512,512)
+    abundance_t = torch.zeros((opt.hschannel, HRMS.shape[2], HRMS.shape[3])).cuda()  # (31,512,512)
+    a = []
+    for j in range(0, HRMS.shape[2] - training_size + 1, stride):
+        a.append(j)
+    a.append(HRMS.shape[2] - training_size)
+    b = []
+    for j in range(0, HRMS.shape[3] - training_size + 1, stride):
+        b.append(j)
+    b.append(HRMS.shape[3] - training_size)
+    for j in a:
+        for k in b:
+            temp_hrms = HRMS[:, :, j:j + training_size, k:k + training_size]
+            temp_lrhs = LRHS[:, :, j//opt.sf:j//opt.sf + training_size_LRHS, k//opt.sf:k//opt.sf + training_size_LRHS]
+
+            with torch.no_grad():
+                # print(temp_hrms.shape)
+                #                    HSI = net2(R,R_inv,temp_hrms)
+                HSI = net2(temp_lrhs, temp_hrms)
+                HSI = HSI.squeeze()
+                #                   print(HSI.shape)
+                HSI = torch.clamp(HSI, 0, 1)
+                abundance_t[:, j:j + training_size, k:k + training_size] = abundance_t[:, j:j + training_size,
+                                                                           k:k + training_size] + HSI
+                index_matrix[:, j:j + training_size, k:k + training_size] = 1 + index_matrix[:, j:j + training_size,
+                                                                                k:k + training_size]
+
+    HSI_recon = abundance_t / index_matrix
+    return HSI_recon.unsqueeze(0)
