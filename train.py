@@ -54,14 +54,6 @@ def train():
         if isinstance(layer, nn.ConvTranspose2d):
             nn.init.xavier_uniform_(layer.weight)
 
-    ## Flops and Params
-    inputx = torch.randn(1, opt.hschannel, opt.trainset_sizeI//opt.sf, opt.trainset_sizeI//opt.sf).cuda()
-    inputy = torch.randn(1, opt.mschannel, opt.trainset_sizeI, opt.trainset_sizeI).cuda()
-    flops, params = profile(model, inputs=(inputx, inputy))
-    macs, params = clever_format([flops, params], "%.2f")
-    logger.info(f"Model Flops: {macs}")
-    logger.info(f"Model Params: {params}")
-
     ## Load training data
     print('===> Loading Datasets')
     file_path = join(opt.data_path, opt.dataset, 'Train')
